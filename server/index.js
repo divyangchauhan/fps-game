@@ -63,7 +63,7 @@ function findSafeSpawnPoint() {
 }
 
 io.on("connection", (socket) => {
-  console.log("A user connected");
+  console.log("A user connected", socket.id);
 
   // Wait for player name before initializing
   socket.on("playerName", (name) => {
@@ -79,19 +79,40 @@ io.on("connection", (socket) => {
       health: 100,
     });
 
+    console.log('Player initialized:', players.get(socket.id));
+    
     // Send current players to the new player
-    socket.emit("currentPlayers", Array.from(players.values()));
+    const currentPlayers = Array.from(players.values());
+    console.log('Sending current players to new player:', currentPlayers);
+    socket.emit("currentPlayers", currentPlayers);
 
     // Notify other players that a new player joined
-    socket.broadcast.emit("playerJoined", players.get(socket.id));
+    const newPlayer = players.get(socket.id);
+    console.log('Broadcasting new player to others:', newPlayer);
+    socket.broadcast.emit("playerJoined", newPlayer);
   });
 
   // Handle player movement
   socket.on("playerMovement", (movementData) => {
     const player = players.get(socket.id);
     if (player) {
-      player.position = movementData.position;
-      player.rotation = movementData.rotation;
+      // Ensure position data is properly formatted
+      if (movementData.position) {
+        player.position = {
+          x: typeof movementData.position.x === 'number' ? movementData.position.x : movementData.position[0],
+          y: typeof movementData.position.y === 'number' ? movementData.position.y : movementData.position[1],
+          z: typeof movementData.position.z === 'number' ? movementData.position.z : movementData.position[2]
+        };
+      }
+      
+      if (movementData.rotation) {
+        player.rotation = {
+          x: typeof movementData.rotation.x === 'number' ? movementData.rotation.x : movementData.rotation[0],
+          y: typeof movementData.rotation.y === 'number' ? movementData.rotation.y : movementData.rotation[1],
+          z: typeof movementData.rotation.z === 'number' ? movementData.rotation.z : movementData.rotation[2]
+        };
+      }
+      
       socket.broadcast.emit("playerMoved", player);
     }
   });

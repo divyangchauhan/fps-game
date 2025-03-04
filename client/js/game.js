@@ -552,16 +552,24 @@ function initializeGame() {
   // Socket.io setup
   socket = io();
 
+  // Send player name to server
+  socket.emit('playerName', playerName);
+
   socket.on("currentPlayers", (serverPlayers) => {
+    console.log('Received current players:', serverPlayers);
     serverPlayers.forEach((playerData) => {
       if (playerData.id !== socket.id) {
+        console.log('Adding player:', playerData);
         addPlayer(playerData);
       }
     });
   });
 
   socket.on("playerJoined", (playerData) => {
-    addPlayer(playerData);
+    console.log('New player joined:', playerData);
+    if (playerData.id !== socket.id) {
+      addPlayer(playerData);
+    }
   });
 
   socket.on("playerLeft", (playerId) => {
@@ -695,6 +703,34 @@ function initializeGame() {
     bullets.push(bullet);
   });
 
+  // Handle initial players and new player joins
+  socket.on('currentPlayers', (playerList) => {
+    playerList.forEach(playerData => {
+      if (playerData.id !== socket.id) {
+        addPlayer(playerData);
+      }
+    });
+  });
+
+  socket.on('playerJoined', (playerData) => {
+    if (playerData.id !== socket.id) {
+      addPlayer(playerData);
+    }
+  });
+
+  // Handle player movement updates
+  socket.on('playerMoved', (playerData) => {
+    const player = players.get(playerData.id);
+    if (player) {
+      player.mesh.position.copy(playerData.position);
+      player.healthBar.setPosition(
+        playerData.position.x,
+        playerData.position.y,
+        playerData.position.z
+      );
+    }
+  });
+
   // Initialize HUD
   updateHUD();
 
@@ -702,20 +738,42 @@ function initializeGame() {
 }
 
 function addPlayer(playerData) {
+  console.log('Adding player with data:', playerData);
+  
   const geometry = new THREE.BoxGeometry(1, 2, 1);
-  const material = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+  const material = new THREE.MeshPhongMaterial({ 
+    color: 0xff0000,
+    transparent: false,
+    opacity: 1
+  });
   const playerMesh = new THREE.Mesh(geometry, material);
-  playerMesh.position.copy(playerData.position);
+  
+  // Ensure position is properly set
+  if (playerData.position.x !== undefined) {
+    playerMesh.position.set(
+      playerData.position.x,
+      playerData.position.y,
+      playerData.position.z
+    );
+  } else if (Array.isArray(playerData.position)) {
+    playerMesh.position.set(
+      playerData.position[0],
+      playerData.position[1],
+      playerData.position[2]
+    );
+  }
+  
   playerMesh.castShadow = true;
   playerMesh.receiveShadow = true;
+  playerMesh.visible = true;
 
   // Create and add health bar with player name
   const healthBar = new HealthBar(playerData.name);
-  healthBar.setHealth(playerData.health);
+  healthBar.setHealth(playerData.health || 100);
   healthBar.setPosition(
-    playerData.position.x,
-    playerData.position.y,
-    playerData.position.z
+    playerMesh.position.x,
+    playerMesh.position.y,
+    playerMesh.position.z
   );
 
   // Add health bar to scene
@@ -729,6 +787,7 @@ function addPlayer(playerData) {
   });
 
   scene.add(playerMesh);
+  console.log('Player mesh added to scene:', playerMesh);
 }
 
 function removePlayer(playerId) {
@@ -878,6 +937,12 @@ function animate() {
       camera.position.y = 2;
       canJump = true;
     }
+
+    // Emit player position update
+    socket.emit('playerMovement', {
+      position: camera.position,
+      rotation: camera.rotation
+    });
 
     // Send position update to server
     socket.emit("playerMovement", {
