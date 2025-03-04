@@ -77,6 +77,11 @@ io.on("connection", (socket) => {
       position: findSafeSpawnPoint(),
       rotation: { x: 0, y: 0, z: 0 },
       health: 100,
+      lives: 3,
+      inactive: false,
+      invulnerable: true,
+      invulnerableUntil: Date.now() + 3000, // 3 seconds of invulnerability
+      lastActivity: Date.now(),
     });
 
     console.log('Player initialized:', players.get(socket.id));
@@ -95,7 +100,7 @@ io.on("connection", (socket) => {
   // Handle player movement
   socket.on("playerMovement", (movementData) => {
     const player = players.get(socket.id);
-    if (player) {
+    if (player && !player.inactive) {
       // Ensure position data is properly formatted
       if (movementData.position) {
         player.position = {
@@ -119,10 +124,33 @@ io.on("connection", (socket) => {
         position: player.position,
         rotation: player.rotation,
         health: player.health,
-        name: player.name
+        name: player.name,
+        inactive: false
       };
       
       socket.broadcast.emit("playerMoved", playerData);
+
+      // Update last activity timestamp
+      player.lastActivity = Date.now();
+    }
+  });
+
+  // Handle player inactivity
+  socket.on("playerInactive", () => {
+    const player = players.get(socket.id);
+    if (player) {
+      player.inactive = true;
+      socket.broadcast.emit("playerInactive", socket.id);
+    }
+  });
+
+  // Handle position sync request
+  socket.on("requestSync", () => {
+    const player = players.get(socket.id);
+    if (player) {
+      player.inactive = false;
+      // Send current state of all players to the requesting player
+      socket.emit("currentPlayers", Array.from(players.values()));
     }
   });
 
@@ -139,14 +167,48 @@ io.on("connection", (socket) => {
   socket.on("playerHit", (data) => {
     const hitPlayer = players.get(data.hitPlayerId);
     if (hitPlayer) {
+      // Check if player is invulnerable
+      if (hitPlayer.invulnerable && Date.now() < hitPlayer.invulnerableUntil) {
+        return; // Skip damage if player is invulnerable
+      }
       console.log('Player hit:', data.hitPlayerId, 'Current health:', hitPlayer.health, 'Damage:', data.damage);
       hitPlayer.health -= data.damage;
 
       if (hitPlayer.health <= 0) {
         console.log('Player died:', data.hitPlayerId);
-        io.emit("playerDied", data.hitPlayerId);
-        hitPlayer.health = 100;
-        hitPlayer.position = findSafeSpawnPoint();
+        hitPlayer.lives--;
+        
+        if (hitPlayer.lives <= 0) {
+          // Game Over
+          io.emit("gameOver", data.hitPlayerId);
+          // Reset lives but keep player in game over state
+          hitPlayer.lives = 0;
+        } else {
+          // Still has lives left, respawn immediately
+          const newSpawnPoint = findSafeSpawnPoint();
+          hitPlayer.health = 100;
+          hitPlayer.position = newSpawnPoint;
+          hitPlayer.invulnerable = true;
+          hitPlayer.invulnerableUntil = Date.now() + 3000; // 3 seconds of invulnerability
+          
+          // Notify about death and respawn
+          io.emit("playerDied", {
+            playerId: data.hitPlayerId,
+            livesLeft: hitPlayer.lives,
+            newPosition: newSpawnPoint,
+            newHealth: hitPlayer.health
+          });
+
+          // Broadcast new position to all players immediately
+          io.emit("playerMoved", {
+            id: hitPlayer.id,
+            position: newSpawnPoint,
+            rotation: hitPlayer.rotation,
+            health: hitPlayer.health,
+            name: hitPlayer.name,
+            inactive: false
+          });
+        }
       }
 
       const healthUpdate = {
@@ -171,17 +233,21 @@ io.on("connection", (socket) => {
   // Update the requestRespawn handler
   socket.on("requestRespawn", () => {
     const player = players.get(socket.id);
-    if (player) {
+    if (player && player.lives > 0) {
       const spawnPosition = findSafeSpawnPoint();
       player.health = 100;
       player.position = spawnPosition;
 
-      socket.emit("respawnPosition", spawnPosition);
+      socket.emit("respawnPosition", {
+        position: spawnPosition,
+        lives: player.lives
+      });
 
       io.emit("playerHealthUpdate", {
         id: socket.id,
         name: player.name,
         health: player.health,
+        lives: player.lives,
         damage: 0,
       });
     }

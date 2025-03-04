@@ -11,6 +11,8 @@ let direction = new THREE.Vector3();
 let socket;
 const players = new Map();
 let playerHealth = 100;
+let playerLives = 3;
+let isGameOver = false;
 const BULLET_SPEED = 70;
 const DAMAGE_PER_HIT = 5;
 const bullets = [];
@@ -18,8 +20,11 @@ const RESPAWN_TIME = 3; // seconds to wait before respawning
 let isDead = false;
 let respawnCountdown = 0;
 let playerName = "";
+let isInvulnerable = false;
+let invulnerableUntil = 0;
+let invulnerabilityEffect = null;
 
-const healthDisplay = document.getElementById("health");
+// HUD elements will be created dynamically
 
 // Add HUD constants near the top with other constants
 const HUD_CONFIG = {
@@ -56,6 +61,7 @@ deathOverlay.style.cssText = `
     color: white;
     text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
     z-index: 1000;
+    flex-direction: column;
 `;
 document.body.appendChild(deathOverlay);
 
@@ -149,6 +155,11 @@ class HealthBar {
     // Clear canvas
     this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
     
+    // Draw background for better visibility
+    this.context.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    this.context.roundRect(10, 10, this.canvas.width - 20, this.canvas.height - 20, 5);
+    this.context.fill();
+    
     // Draw name
     this.context.font = "bold 32px Arial";
     this.context.fillStyle = "white";
@@ -160,20 +171,36 @@ class HealthBar {
     if (health !== null) {
       this.context.font = "bold 24px Arial";
       
-      // Set color based on health
+      // Draw health bar background
+      const barWidth = 160;
+      const barHeight = 15;
+      const barX = (this.canvas.width - barWidth) / 2;
+      const barY = this.canvas.height / 4;
+      
+      this.context.fillStyle = '#333333';
+      this.context.fillRect(barX, barY, barWidth, barHeight);
+      
+      // Draw health bar
+      const healthWidth = (Math.max(0, health) / 100) * barWidth;
+      let healthColor;
       if (health > 60) {
-        this.context.fillStyle = "#00ff00"; // Green
+        healthColor = "#00ff00"; // Green
       } else if (health > 30) {
-        this.context.fillStyle = "#ffff00"; // Yellow
+        healthColor = "#ffff00"; // Yellow
       } else {
-        this.context.fillStyle = "#ff4500"; // Orange-Red
+        healthColor = "#ff4500"; // Orange-Red
       }
       
-      // Draw health text above name
+      this.context.fillStyle = healthColor;
+      this.context.fillRect(barX, barY, healthWidth, barHeight);
+      
+      // Draw health text
+      this.context.fillStyle = 'white';
+      this.context.font = "bold 16px Arial";
       this.context.fillText(
         `${Math.max(0, Math.round(health))} HP`,
         this.canvas.width / 2,
-        this.canvas.height / 4
+        barY + barHeight + 15
       );
     }
     
@@ -406,15 +433,15 @@ healthFill.style.cssText = `
 `;
 healthBar.appendChild(healthFill);
 
-const healthText = document.createElement("div");
-healthText.style.cssText = `
+const healthDisplay = document.createElement("div");
+healthDisplay.style.cssText = `
     position: absolute;
     top: 0;
     left: 10px;
     line-height: 20px;
     font-weight: bold;
 `;
-healthBar.appendChild(healthText);
+healthBar.appendChild(healthDisplay);
 
 const weaponInfo = document.createElement("div");
 weaponInfo.style.cssText = `
@@ -433,7 +460,7 @@ function updateHUD() {
   // Update health bar
   const healthPercent = Math.max(0, playerHealth) / 100;
   healthFill.style.width = `${healthPercent * 100}%`;
-  healthText.textContent = `Health: ${Math.max(0, playerHealth)}`;
+  healthDisplay.textContent = `Health: ${Math.max(0, playerHealth)} | Lives: ${playerLives}`;
 
   // Update health bar color based on health level
   if (playerHealth > 60) {
@@ -459,6 +486,29 @@ let isRunning = false;
 let runStartTime = 0;
 const WALK_SPEED = 33.3; // 100/3
 const RUN_SPEED = 66.7; // 200/3
+
+// Tab visibility handling
+let isTabActive = true;
+let lastUpdateTime = performance.now();
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    isTabActive = false;
+    // Clear movement flags when tab becomes inactive
+    moveForward = moveBackward = moveLeft = moveRight = false;
+    // Notify server about inactivity
+    if (socket) {
+      socket.emit('playerInactive');
+    }
+  } else {
+    isTabActive = true;
+    lastUpdateTime = performance.now();
+    // Request current position from server when tab becomes active
+    if (socket) {
+      socket.emit('requestSync');
+    }
+  }
+});
 const RUN_DURATION = 5000; // 5 seconds in milliseconds
 
 init();
@@ -602,6 +652,29 @@ function initializeGame() {
     }
   });
 
+  socket.on("playerDied", (data) => {
+    if (data.playerId === socket.id) {
+      handleDeath(data);
+      // Start invulnerability period
+      isInvulnerable = true;
+      invulnerableUntil = Date.now() + 3000;
+      
+      // Create invulnerability visual effect
+      if (!invulnerabilityEffect) {
+        invulnerabilityEffect = new THREE.Mesh(
+          new THREE.SphereGeometry(1.5, 32, 32),
+          new THREE.MeshBasicMaterial({
+            color: 0x00ffff,
+            transparent: true,
+            opacity: 0.3
+          })
+        );
+      }
+      invulnerabilityEffect.position.copy(camera.position);
+      scene.add(invulnerabilityEffect);
+    }
+  });
+
   socket.on("playerHealthUpdate", (data) => {
     console.log('Health update received:', data);
     const player = players.get(data.id);
@@ -614,11 +687,6 @@ function initializeGame() {
         // Update local player health
         playerHealth = data.health;
         updateHUD();
-
-        // Check for death
-        if (playerHealth <= 0 && !isDead) {
-          handleDeath();
-        }
 
         // Enhanced visual feedback when hit
         if (data.damage && !isDead) {
@@ -906,7 +974,31 @@ function onWindowResize() {
 }
 
 function animate() {
+  if (!isTabActive) return;
+  
+  const currentTime = performance.now();
+  const deltaTime = (currentTime - lastUpdateTime) / 1000; // Convert to seconds
+  lastUpdateTime = currentTime;
+  
+  // Skip frame if delta time is too large (tab was inactive)
+  if (deltaTime > 0.1) return;
+  
   requestAnimationFrame(animate);
+
+  // Update invulnerability effect
+  if (isInvulnerable) {
+    if (Date.now() >= invulnerableUntil) {
+      isInvulnerable = false;
+      if (invulnerabilityEffect && invulnerabilityEffect.parent) {
+        scene.remove(invulnerabilityEffect);
+      }
+    } else {
+      if (invulnerabilityEffect) {
+        invulnerabilityEffect.position.copy(camera.position);
+        invulnerabilityEffect.material.opacity = 0.3 + 0.2 * Math.sin(Date.now() / 200);
+      }
+    }
+  }
 
   // Make all health bars face the camera
   players.forEach((player) => {
@@ -978,35 +1070,81 @@ function animate() {
 }
 
 // Add death handling functions
-function handleDeath() {
+function handleDeath(data) {
   isDead = true;
-  controls.unlock(); // Release mouse control
+  playerLives = data.livesLeft;
 
-  // Show death overlay
-  deathOverlay.style.display = "flex";
-  respawnCountdown = RESPAWN_TIME;
-  updateDeathOverlay();
+  if (playerLives <= 0) {
+    // Game Over
+    handleGameOver();
+    return;
+  }
 
-  // Disable movement
+  // Quick red flash effect
+  deathOverlay.style.backgroundColor = 'rgba(255, 0, 0, 0.5)';
+  deathOverlay.style.display = 'flex';
+  
+  // Disable movement briefly
   moveForward = moveBackward = moveLeft = moveRight = false;
+  
+  // Immediate respawn
+  setTimeout(() => {
+    isDead = false;
+    deathOverlay.style.display = 'none';
+    deathOverlay.style.backgroundColor = 'rgba(255, 0, 0, 0.3)';
+    
+    // Set new position and health
+    camera.position.set(
+      data.newPosition.x,
+      data.newPosition.y,
+      data.newPosition.z
+    );
+    playerHealth = data.newHealth;
+    
+    // Update HUD
+    updateHUD();
+    
+    // Re-enable controls
+    controls.lock();
 
-  // Start respawn countdown
-  const countdownInterval = setInterval(() => {
-    respawnCountdown--;
-    updateDeathOverlay();
+    // Broadcast new position to all players
+    socket.emit('playerMovement', {
+      position: camera.position,
+      rotation: camera.rotation
+    });
+  }, 500); // Brief 500ms death indication
+}
 
-    if (respawnCountdown <= 0) {
-      clearInterval(countdownInterval);
-      respawn();
-    }
-  }, 1000);
+function handleGameOver() {
+  isGameOver = true;
+  deathOverlay.style.display = "flex";
+  deathOverlay.innerHTML = `
+    <h1 style="color: #ff0000; margin-bottom: 20px">GAME OVER!</h1>
+    <p>You ran out of lives!</p>
+    <button onclick="location.reload()" style="
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 18px;
+      background: #ff4500;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background 0.3s;
+    ">Play Again</button>
+  `;
+  
+  // Permanently disable movement
+  moveForward = moveBackward = moveLeft = moveRight = false;
+  controls.unlock();
+  document.removeEventListener('click', controls.lock);
 }
 
 function updateDeathOverlay() {
   deathOverlay.innerHTML = `
     <div style="text-align: center">
       <h1 style="color: #ff0000; margin-bottom: 20px">YOU DIED!</h1>
-      <p>Respawning in ${respawnCountdown} seconds...</p>
+      <p>Lives remaining: ${playerLives}</p>
     </div>
   `;
 }
@@ -1020,14 +1158,21 @@ function respawn() {
 }
 
 // Update the respawn handler to update HUD
-socket.on("respawnPosition", (position) => {
-  if (isDead) {
+socket.on("respawnPosition", (data) => {
+  if (isDead && !isGameOver) {
     // Set new position
-    camera.position.set(position.x, position.y, position.z);
-    // Reset health
+    camera.position.set(data.position.x, data.position.y, data.position.z);
+    // Reset health and update lives
     playerHealth = 100;
+    playerLives = data.lives;
     updateHUD(); // Update HUD after respawn
     // Re-enable controls
     controls.lock();
+  }
+});
+
+socket.on("gameOver", (playerId) => {
+  if (playerId === socket.id) {
+    handleGameOver();
   }
 });
