@@ -128,25 +128,32 @@ class HealthBar {
     this.container.add(this.backgroundMesh);
     this.container.add(this.healthMesh);
 
-    // Add player name
+    // Create canvas for name and health
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
     canvas.width = 256;
-    canvas.height = 64;
-    context.font = "bold 32px Arial";
-    context.fillStyle = "white";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText(name, canvas.width / 2, canvas.height / 2);
-
+    canvas.height = 128; // Increased height for both name and health
+    
+    // Store context for later updates
+    this.canvas = canvas;
+    this.context = context;
+    this.playerName = name;
+    
+    // Create texture and sprite
     const nameTexture = new THREE.CanvasTexture(canvas);
     const nameMaterial = new THREE.SpriteMaterial({
       map: nameTexture,
       transparent: true,
     });
     this.nameSprite = new THREE.Sprite(nameMaterial);
-    this.nameSprite.scale.set(2, 0.5, 1);
+    this.nameSprite.scale.set(2, 1, 1); // Adjusted scale for larger height
     this.nameSprite.position.y = 0.5; // Position above health bar
+    
+    // Store texture for updates
+    this.nameTexture = nameTexture;
+    
+    // Initial render of just the name
+    this.updateNameAndHealth(name);
 
     this.container.add(this.nameSprite);
     this.container.rotation.x = -Math.PI / 6;
@@ -159,6 +166,42 @@ class HealthBar {
     });
     this.outline = new THREE.Mesh(outlineGeometry, outlineMaterial);
     this.container.add(this.outline);
+  }
+
+  updateNameAndHealth(name, health = null) {
+    // Clear canvas
+    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    // Draw name
+    this.context.font = "bold 32px Arial";
+    this.context.fillStyle = "white";
+    this.context.textAlign = "center";
+    this.context.textBaseline = "middle";
+    this.context.fillText(name, this.canvas.width / 2, this.canvas.height / 2);
+    
+    // Only draw health if it's provided
+    if (health !== null) {
+      this.context.font = "bold 24px Arial";
+      
+      // Set color based on health
+      if (health > 60) {
+        this.context.fillStyle = "#00ff00"; // Green
+      } else if (health > 30) {
+        this.context.fillStyle = "#ffff00"; // Yellow
+      } else {
+        this.context.fillStyle = "#ff4500"; // Orange-Red
+      }
+      
+      // Draw health text above name
+      this.context.fillText(
+        `${Math.max(0, Math.round(health))} HP`,
+        this.canvas.width / 2,
+        this.canvas.height / 4
+      );
+    }
+    
+    // Update texture
+    this.nameTexture.needsUpdate = true;
   }
 
   setHealth(health) {
@@ -175,6 +218,9 @@ class HealthBar {
     } else {
       this.healthMaterial.color.setHex(0xff4500); // Orange-Red
     }
+
+    // Update the health text
+    this.updateNameAndHealth(this.playerName, health);
 
     // Add a quick scale animation when taking damage
     this.container.scale.y = 1.5;
