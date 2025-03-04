@@ -112,27 +112,14 @@ document.body.appendChild(loginOverlay);
 
 class HealthBar {
   constructor(name) {
-    const geometry = new THREE.BoxGeometry(1, 0.1, 0.1);
-    // Brighter colors for better visibility
-    this.healthMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-    this.backgroundMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-
-    // Background (red) part of health bar
-    this.backgroundMesh = new THREE.Mesh(geometry, this.backgroundMaterial);
-
-    // Foreground (green) part of health bar
-    this.healthMesh = new THREE.Mesh(geometry, this.healthMaterial);
-
-    // Create a container for the health bar
+    // Create a container for the name and health display
     this.container = new THREE.Group();
-    this.container.add(this.backgroundMesh);
-    this.container.add(this.healthMesh);
 
     // Create canvas for name and health
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
     canvas.width = 256;
-    canvas.height = 128; // Increased height for both name and health
+    canvas.height = 128;
     
     // Store context for later updates
     this.canvas = canvas;
@@ -146,8 +133,7 @@ class HealthBar {
       transparent: true,
     });
     this.nameSprite = new THREE.Sprite(nameMaterial);
-    this.nameSprite.scale.set(2, 1, 1); // Adjusted scale for larger height
-    this.nameSprite.position.y = 0.5; // Position above health bar
+    this.nameSprite.scale.set(2, 1, 1);
     
     // Store texture for updates
     this.nameTexture = nameTexture;
@@ -157,15 +143,6 @@ class HealthBar {
 
     this.container.add(this.nameSprite);
     this.container.rotation.x = -Math.PI / 6;
-
-    // Add an outline to make the health bar more visible
-    const outlineGeometry = new THREE.BoxGeometry(1.05, 0.15, 0.15);
-    const outlineMaterial = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      side: THREE.BackSide,
-    });
-    this.outline = new THREE.Mesh(outlineGeometry, outlineMaterial);
-    this.container.add(this.outline);
   }
 
   updateNameAndHealth(name, health = null) {
@@ -205,20 +182,6 @@ class HealthBar {
   }
 
   setHealth(health) {
-    // Scale the green bar based on health percentage
-    const healthPercent = Math.max(0, health) / 100;
-    this.healthMesh.scale.x = healthPercent;
-    this.healthMesh.position.x = -(1 - healthPercent) / 2;
-
-    // Change color based on health level
-    if (health > 60) {
-      this.healthMaterial.color.setHex(0x00ff00); // Green
-    } else if (health > 30) {
-      this.healthMaterial.color.setHex(0xffff00); // Yellow
-    } else {
-      this.healthMaterial.color.setHex(0xff4500); // Orange-Red
-    }
-
     // Update the health text
     this.updateNameAndHealth(this.playerName, health);
 
@@ -632,12 +595,21 @@ function initializeGame() {
         playerData.position.y,
         playerData.position.z
       );
+      // Update health if provided
+      if (playerData.health !== undefined) {
+        player.healthBar.setHealth(playerData.health);
+      }
     }
   });
 
   socket.on("playerHealthUpdate", (data) => {
+    console.log('Health update received:', data);
     const player = players.get(data.id);
     if (player) {
+      // Update the player's health bar
+      player.healthBar.setHealth(data.health);
+      console.log('Updated health for player:', data.id, 'to:', data.health);
+
       if (data.id === socket.id) {
         // Update local player health
         playerHealth = data.health;
@@ -815,7 +787,6 @@ function addPlayer(playerData) {
 
   // Create and add health bar with player name
   const healthBar = new HealthBar(playerData.name);
-  healthBar.setHealth(playerData.health || 100);
   healthBar.setPosition(
     playerMesh.position.x,
     playerMesh.position.y,
@@ -833,7 +804,13 @@ function addPlayer(playerData) {
   });
 
   scene.add(playerMesh);
-  console.log('Player mesh added to scene:', playerMesh);
+  
+  // Set initial health after everything is set up
+  if (playerData.health !== undefined) {
+    healthBar.setHealth(playerData.health);
+  }
+  
+  console.log('Player added with health:', playerData.health);
 }
 
 function removePlayer(playerId) {

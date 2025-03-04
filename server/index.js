@@ -113,7 +113,16 @@ io.on("connection", (socket) => {
         };
       }
       
-      socket.broadcast.emit("playerMoved", player);
+      // Include health in movement updates
+      const playerData = {
+        id: player.id,
+        position: player.position,
+        rotation: player.rotation,
+        health: player.health,
+        name: player.name
+      };
+      
+      socket.broadcast.emit("playerMoved", playerData);
     }
   });
 
@@ -130,20 +139,25 @@ io.on("connection", (socket) => {
   socket.on("playerHit", (data) => {
     const hitPlayer = players.get(data.hitPlayerId);
     if (hitPlayer) {
+      console.log('Player hit:', data.hitPlayerId, 'Current health:', hitPlayer.health, 'Damage:', data.damage);
       hitPlayer.health -= data.damage;
 
       if (hitPlayer.health <= 0) {
+        console.log('Player died:', data.hitPlayerId);
         io.emit("playerDied", data.hitPlayerId);
         hitPlayer.health = 100;
         hitPlayer.position = findSafeSpawnPoint();
       }
 
-      io.emit("playerHealthUpdate", {
+      const healthUpdate = {
         id: hitPlayer.id,
         name: hitPlayer.name,
         health: hitPlayer.health,
         damage: data.damage,
-      });
+      };
+      
+      console.log('Sending health update:', healthUpdate);
+      io.emit("playerHealthUpdate", healthUpdate);
     }
   });
 
